@@ -54,32 +54,38 @@ export class GetAzureLogsTool {
     follow,
   }: z.infer<typeof schema>) {
     try {
-      const command = new AzureContainerAppCliCommand(
+      let allLogs = "";
+
+      const replicas = await this.getReplicaNames(
         resourceGroup,
         containerAppName,
-        revision,
-        tail,
-        follow
-      ).getCommand();
+        revision
+      );
 
-      const { stdout, stderr } = await execAsync(command);
+      for (const replica of replicas) {
+        const command = new AzureContainerAppCliCommand(
+          resourceGroup,
+          containerAppName,
+          revision,
+          tail,
+          follow
+        ).getCommand();
 
-      if (stderr) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `An error occurred while getting the logs: ${stderr}`,
-            },
-          ],
-        };
+        const { stdout, stderr } = await execAsync(command);
+
+        allLogs += `\n=== Logs of replica: ${replica} ===\n`;
+
+        if (stderr) allLogs += `\n${stderr}\n`;
+        else allLogs += `\n${stdout}\n`;
+
+        allLogs += "=".repeat(50) + "\n";
       }
 
       return {
         content: [
           {
             type: "text" as const,
-            text: `Logs of the Container App ${containerAppName}:\n${stdout}`,
+            text: `Logs of the Container App ${containerAppName}:\n${allLogs}`,
           },
         ],
       };
@@ -95,5 +101,23 @@ export class GetAzureLogsTool {
         ],
       };
     }
+  }
+
+  async getReplicaNames(
+    resourceGroup: string,
+    containerAppName: string,
+    revision?: string
+  ): Promise<string[]> {
+    let command = `az containerapp replica list --name ${containerAppName} --resource-group ${resourceGroup}`;
+    if (revision) command += ` --revision ${revision}`;
+    command += ` --output json`;
+
+    const { stdout: replicasJson, stderr } = await execAsync(command);
+
+    if (stderr) throw new Error(`Error executing the command: ${stderr}`);
+
+    const replicas = JSON.parse(replicasJson);
+
+    return replicas.map((replica: { name: string }) => replica.name);
   }
 }

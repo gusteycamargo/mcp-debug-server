@@ -700,9 +700,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"mcp-azure-container-app-logs-server@workspace:.":
+"mcp-debug-server@workspace:.":
   version: 0.0.0-use.local
-  resolution: "mcp-azure-container-app-logs-server@workspace:."
+  resolution: "mcp-debug-server@workspace:."
   dependencies:
     "@modelcontextprotocol/sdk": "npm:^1.9.0"
     "@types/express": "npm:^5.0.1"
