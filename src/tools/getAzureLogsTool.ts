@@ -6,7 +6,6 @@ import { Tool } from "../decorators/Tool.js";
 const execAsync = promisify(exec);
 
 const schema = z.object({
-  resourceGroup: z.string().describe("Nome do grupo de recursos do Azure"),
   containerAppName: z.string().describe("Nome do Container App"),
   revision: z
     .string()
@@ -20,6 +19,14 @@ const schema = z.object({
     .boolean()
     .optional()
     .describe("Acompanhar logs em tempo real (opcional)"),
+  search: z
+    .string()
+    .optional()
+    .describe("Filtrar logs que contenham esta string (opcional)"),
+  subscription: z
+    .string()
+    .optional()
+    .describe("Nome da assinatura do Azure (opcional)"),
 });
 
 class AzureContainerAppCliCommand {
@@ -42,19 +49,76 @@ class AzureContainerAppCliCommand {
   getCommand() {
     return this.command;
   }
+
+  static async getContainerAppName(containerAppName: string) {
+    const { stdout, stderr } = await execAsync(
+      `az containerapp list --query "[?contains(name, '${containerAppName.toLowerCase()}')].name" -o tsv`
+    );
+
+    if (stderr) throw new Error(`Error on get container app name: ${stderr}`);
+
+    return stdout.trim();
+  }
+
+  static async getResourceGroup(containerAppName: string) {
+    const { stdout, stderr } = await execAsync(
+      `az containerapp list --query "[?name=='${containerAppName}'].resourceGroup" -o tsv`
+    );
+
+    if (stderr) throw new Error(`Error on get resource group: ${stderr}`);
+
+    return stdout.trim();
+  }
+
+  static async changeSubscription(subscription: string) {
+    const { stdout, stderr } = await execAsync(`az account list --output json`);
+
+    if (stderr) throw new Error(`Error on list subscriptions: ${stderr}`);
+
+    const subscriptions = JSON.parse(stdout);
+
+    const subscriptionId = subscriptions.find((sub: { name: string }) =>
+      sub.name.toLowerCase().includes(subscription.toLowerCase())
+    );
+
+    if (!subscriptionId)
+      throw new Error(`Subscription ${subscription} not found`);
+
+    const { stderr: changeSubscriptionError } = await execAsync(
+      `az account set --subscription ${subscriptionId.id}`
+    );
+
+    if (changeSubscriptionError)
+      throw new Error(
+        `Error on change subscription: ${changeSubscriptionError}`
+      );
+  }
 }
 
 export class GetAzureLogsTool {
   @Tool({ schema: schema.shape })
   async getAzureContainerAppLogs({
-    resourceGroup,
-    containerAppName,
+    containerAppName: rawContainerAppName,
     revision,
     tail,
     follow,
+    search,
+    subscription,
   }: z.infer<typeof schema>) {
     try {
       let allLogs = "";
+      if (subscription) {
+        await AzureContainerAppCliCommand.changeSubscription(subscription);
+      }
+
+      const containerAppName =
+        await AzureContainerAppCliCommand.getContainerAppName(
+          rawContainerAppName
+        );
+
+      const resourceGroup = await AzureContainerAppCliCommand.getResourceGroup(
+        containerAppName
+      );
 
       const replicas = await this.getReplicaNames(
         resourceGroup,
@@ -73,12 +137,16 @@ export class GetAzureLogsTool {
 
         const { stdout, stderr } = await execAsync(command);
 
-        allLogs += `\n=== Logs of replica: ${replica} ===\n`;
+        let logs = stderr ? `\n${stderr}\n` : `\n${stdout}\n`;
 
-        if (stderr) allLogs += `\n${stderr}\n`;
-        else allLogs += `\n${stdout}\n`;
+        if (search) {
+          logs = logs
+            .split("\n")
+            .filter((line) => line.includes(search))
+            .join("\n");
+        }
 
-        allLogs += "=".repeat(50) + "\n";
+        allLogs += `\n=== Logs of replica: ${replica} ===\n${logs}`;
       }
 
       return {
